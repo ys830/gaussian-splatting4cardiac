@@ -42,7 +42,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scale_modifier=scaling_modifier, # 缩放修正因子
         viewmatrix=viewpoint_camera.world_view_transform, # 视图矩阵
         projmatrix=viewpoint_camera.full_proj_transform, # 投影矩阵
-        # sh_degree=pc.active_sh_degree,  # SH（球谐函数）的阶数
+        sh_degree=pc.active_sh_degree,  # SH（球谐函数）的阶数
         campos=viewpoint_camera.camera_center, # 相机位置
         prefiltered=False,
         debug=pipe.debug
