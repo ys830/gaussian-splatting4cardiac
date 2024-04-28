@@ -55,6 +55,20 @@ __forceinline__ __device__ void getRect(const float2 p, int max_radius, uint2& r
 	};
 }
 
+__forceinline__ __device__ void get3DRect(const float3 p, int max_radius, uint3& rect_min, uint3& rect_max, dim3 grid)
+{
+    rect_min = {
+        min(grid.x, max((int)0, (int)((p.x - max_radius) / BLOCK_X))),
+        min(grid.y, max((int)0, (int)((p.y - max_radius) / BLOCK_Y))),
+        min(grid.z, max((int)0, (int)((p.z - max_radius) / BLOCK_Z)))
+    };
+    rect_max = {
+        min(grid.x, max((int)0, (int)((p.x + max_radius + BLOCK_X - 1) / BLOCK_X))),
+        min(grid.y, max((int)0, (int)((p.y + max_radius + BLOCK_Y - 1) / BLOCK_Y))),
+        min(grid.z, max((int)0, (int)((p.z + max_radius + BLOCK_Z - 1) / BLOCK_Z)))
+    };
+}
+
 __forceinline__ __device__ float3 transformPoint4x3(const float3& p, const float* matrix)
 {
 	float3 transformed = {
@@ -75,6 +89,18 @@ __forceinline__ __device__ float4 transformPoint4x4(const float3& p, const float
 	};
 	return transformed;
 }
+
+__forceinline__ __device__ void transformPoint(const float* init_point, const float* R, const float* T, float3* transformed_point) {
+    float rx = R[0] * init_point[0] + R[1] * init_point[1] + R[2] * init_point[2];
+    float ry = R[3] * init_point[0] + R[4] * init_point[1] + R[5] * init_point[2];
+    float rz = R[6] * init_point[0] + R[7] * init_point[1] + R[8] * init_point[2];
+
+    transformed_point->x = rx + T[0];
+    transformed_point->y = ry + T[1];
+    transformed_point->z = rz + T[2];
+}
+
+
 
 __forceinline__ __device__ float3 transformVec4x3(const float3& p, const float* matrix)
 {

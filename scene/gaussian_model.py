@@ -52,7 +52,7 @@ class GaussianModel:
         self._rotation = torch.empty(0) # 旋转参数, 四元组
         self._opacity = torch.empty(0) # 不透明度
         # self.max_radii2D = torch.empty(0) # 投影到2D时, 每个2D gaussian最大的半径
-        # self.max_radii3D = torch.empty(0)
+        self.max_radii3D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0) # 3Dgaussian的均值的累积梯度
         self.denom = torch.empty(0)
         self.optimizer = None
@@ -123,7 +123,7 @@ class GaussianModel:
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
-    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
+    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):#用于从给定的点云数据 pcd 创建对象的初始化状态。
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
