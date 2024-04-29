@@ -49,7 +49,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         # sh_degree=pc.active_sh_degree,  # SH（球谐函数）的阶数
         # campos=viewpoint_camera.camera_center, # 相机位置 [3]
         init_plane = viewpoint_camera.plane,
-        prefiltered=False,
+        # prefiltered=False,
         debug=pipe.debug
     )
   

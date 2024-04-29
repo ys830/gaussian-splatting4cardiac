@@ -267,13 +267,12 @@ __global__ void preprocessCUDA(
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y * BLOCK_Z)
 renderCUDA(
-    const uint3* __restrict__ ranges, // 每个线程块应处理的点云数据的索引范围
-    const uint32_t* __restrict__ point_list, // 包含所有点索引的数组
+    int P, // 总高斯数目
     int W, int H,  // 体数据的宽度、高度
     const int* __restrict__ radii, // 每个高斯的半径
-    const float3* __restrict__ points_xyz_image,
-    const float3* __restrict__ convert_plane,
-    const float* __restrict__ opacities,
+    const float3* __restrict__ points_xyz_image, // 高斯点的位置信息
+    const float3* __restrict__ convert_plane, // 每个体素的位置
+    const float* __restrict__ opacities, // 每个高斯的不透明度
     float* __restrict__ output_opacity // 输出的不透明度数组
 ) {
     auto block = cg::this_thread_block();
@@ -286,18 +285,16 @@ renderCUDA(
     float opacity_acc = 0.0; // 累积不透明度
     float weight_sum = 0.0; // 权重和
 
-    // 遍历所有的点云高斯，计算影响当前点的不透明度
-    for (int i = 0; i < ranges[block.group_index().z].y; ++i) {
-        uint point_idx = point_list[i];
-        float3 gauss_point = points_xyz_image[point_idx]; // 高斯中心
+    // 直接遍历所有的高斯
+    for (int i = 0; i < P; ++i) {
+        float3 gauss_point = points_xyz_image[i]; // 高斯中心
         float distance = length(gauss_point - point); // 计算距离
 
-        int radius = radii[point_idx];
+        int radius = radii[i];
         if (distance > 3 * radius) continue; // 如果距离大于半径的三倍，则忽略
 
-        // 计算影响度（简化模型，通常需要更复杂的高斯衰减函数）
         float influence = exp(-distance * distance / (radius * radius));
-        float opacity = opacities[point_idx] * influence; // 加权不透明度
+        float opacity = opacities[i] * influence; // 加权不透明度
 
         opacity_acc += opacity;
         weight_sum += influence;
@@ -309,19 +306,21 @@ renderCUDA(
         output_opacity[idx] = 0.0; // 如果没有任何有效的高斯影响，设置不透明度为0
     }
 }
+
 void FORWARD::render(
-	const dim3 grid, dim3 block,
-	const uint3* ranges,
-	const uint32_t* point_list,
-	int W, int H,
-	float* output_opacity)
-{
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
-		ranges,
-		point_list,
-		W, H,
-		output_opacity);
+    const dim3 grid, dim3 block,
+    int P, // 总高斯数目
+    int W, int H, // 体数据的宽度、高度
+    const float* opacities, // 每个高斯的不透明度数组
+    float* output_opacity // 输出的不透明度数组
+) {
+    renderCUDA<NUM_CHANNELS> <<<grid, block>>> (
+        P,
+        W, H,
+        opacities,
+        output_opacity);
 }
+
 
 void FORWARD::preprocess(int P, int D, int M,
 	const float* means3D,
