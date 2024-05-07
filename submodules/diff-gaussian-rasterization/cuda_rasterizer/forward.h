@@ -27,39 +27,32 @@ namespace FORWARD
 		const float scale_modifier,
 		const glm::vec4* rotations,
 		const float* opacities,
-		const float* shs,
-		bool* clamped,
 		const float* cov3D_precomp,
-		const float* colors_precomp,
-		const float* viewmatrix,
-		const float* projmatrix,
-		const glm::vec3* cam_pos,
+		const float* R,
+		const float* T,
+		const float* init_plane,
+		float3* convert_plane,
 		const int W, int H,
-		const float focal_x, float focal_y,
-		const float tan_fovx, float tan_fovy,
 		int* radii,
-		float2* points_xy_image,
-		float* depths,
+		float3* points_xyz_image,
 		float* cov3Ds,
-		float* colors,
-		float4* conic_opacity,
 		const dim3 grid,
-		uint32_t* tiles_touched,
-		bool prefiltered);
+		uint32_t* tiles_touched);
 
 	// Main rasterization method.
 	void render(
 		const dim3 grid, dim3 block,
-		const uint2* ranges,
-		const uint32_t* point_list,
+		int P,
 		int W, int H,
-		const float2* points_xy_image,
-		const float* features,
-		const float4* conic_opacity,
-		float* final_T,
-		uint32_t* n_contrib,
-		const float* bg_color,
-		float* out_color);
+		const float* opacities,
+		float* output_opacity);
+		// const float2* points_xy_image,
+		// const float* features,
+		// const float4* conic_opacity,
+		// float* final_T,
+		// uint32_t* n_contrib,
+		// const float* bg_color,
+		// float* out_color);
 }
 
 

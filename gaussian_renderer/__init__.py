@@ -15,7 +15,7 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
+def render(viewpoint_camera, pc : GaussianModel, pipe, scaling_modifier = 1.0, override_color = None):
     """
     Render the scene. 
     
@@ -40,7 +40,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         image_length=int(viewpoint_camera.image_length),
         # tanfovx=tanfovx,
         # tanfovy=tanfovy,
-        bg=bg_color, # 背景张量 [0,0,0]
+        # bg=bg_color, # 背景张量 [0,0,0]
         scale_modifier=scaling_modifier, # 缩放修正因子 1.0
         # viewmatrix=viewpoint_camera.world_view_transform, # 视图矩阵 [4,4]
         # projmatrix=viewpoint_camera.full_proj_transform, # 投影矩阵 [4,4]

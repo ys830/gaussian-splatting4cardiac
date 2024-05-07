@@ -345,21 +345,16 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 // (those are handled by a previous kernel call)
 template<int C>
 __global__ void preprocessCUDA(
-	int P, int D, int M,
+	int P, 
 	const float3* means,
 	const int* radii,
-	const float* shs,
-	const bool* clamped,
 	const glm::vec3* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
-	const float* proj,
-	const glm::vec3* campos,
 	const float3* dL_dmean2D,
 	glm::vec3* dL_dmeans,
 	float* dL_dcolor,
 	float* dL_dcov3D,
-	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot)
 {
@@ -385,10 +380,6 @@ __global__ void preprocessCUDA(
 	// That's the second part of the mean gradient. Previous computation
 	// of cov2D and following SH conversion also affects it.
 	dL_dmeans[idx] += dL_dmean;
-
-	// Compute gradient updates due to computing colors from SHs
-	if (shs)
-		computeColorFromSH(idx, D, M, (glm::vec3*)means, *campos, shs, clamped, (glm::vec3*)dL_dcolor, (glm::vec3*)dL_dmeans, (glm::vec3*)dL_dsh);
 
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)

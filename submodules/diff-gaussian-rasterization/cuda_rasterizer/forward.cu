@@ -182,17 +182,46 @@ __device__ void computeEigenvalues(const float* cov3D, float* eigenvalues) {
     cusolverDnDestroy(cusolver_handle);
 }
 
+__device__ void invertSymmetricMatrix(const float* cov3D, float* inversecov3D) {
+    // Reconstruct the full 3x3 symmetric matrix
+    glm::mat3 Vrk = glm::mat3(
+        cov3D[0], cov3D[1], cov3D[2],
+        cov3D[1], cov3D[3], cov3D[4],
+        cov3D[2], cov3D[4], cov3D[5]
+    );
+
+    // Compute determinant
+    float det = Vrk[0][0] * (Vrk[1][1] * Vrk[2][2] - Vrk[2][1] * Vrk[1][2]) -
+                Vrk[0][1] * (Vrk[1][0] * Vrk[2][2] - Vrk[1][2] * Vrk[2][0]) +
+                Vrk[0][2] * (Vrk[1][0] * Vrk[2][1] - Vrk[1][1] * Vrk[2][0]);
+
+    // Check if determinant is zero
+    if (fabs(det) < 1e-6) {
+        printf("Matrix is singular or nearly singular\n");
+        return;
+    }
+
+    // Compute inverse using the formula for symmetric matrices
+    float invDet = 1.0f / det;
+    inversecov3D[0] =  (Vrk[1][1] * Vrk[2][2] - Vrk[2][1] * Vrk[1][2]) * invDet;
+    inversecov3D[1] = -(Vrk[0][1] * Vrk[2][2] - Vrk[0][2] * Vrk[2][1]) * invDet;
+    inversecov3D[2] =  (Vrk[0][1] * Vrk[1][2] - Vrk[0][2] * Vrk[1][1]) * invDet;
+    inversecov3D[3] =  (Vrk[0][0] * Vrk[2][2] - Vrk[0][2] * Vrk[0][2]) * invDet;
+    inversecov3D[4] = -(Vrk[0][0] * Vrk[1][2] - Vrk[1][0] * Vrk[0][2]) * invDet;
+    inversecov3D[5] =  (Vrk[0][0] * Vrk[1][1] - Vrk[1][0] * Vrk[1][0]) * invDet;
+}
+
 // Perform initial steps for each Gaussian prior to rasterization.
 template<int C>
 __global__ void preprocessCUDA(
 	int P, //高斯分布的点的数量。
-	int D, //高斯分布的维度。
-	int M, //点云数量
+	// int D, // 球谐函数的最高阶数
+	// int M, // 球谐函数的最大系数数量
 	const float* orig_points, //点云初始化高斯得到的三维坐标
 	const glm::vec3* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
-	const float* opacities,
+	const float* opcities,
 	const float* cov3D_precomp,
 	const float* R,
 	const float* T,
@@ -200,8 +229,9 @@ __global__ void preprocessCUDA(
 	float3* convert_plane,
 	const int W, int H,
 	int* radii,
-	float3* points_xyz_image //之后要计算的平面坐标数组
+	float3* points_xyz_image
 	float* cov3Ds,
+	float* inverses_cov3Ds
 	const dim3 grid, //CUDA 网格的大小
 	uint32_t* tiles_touched) //记录每个高斯覆盖的图像块数量的数组
 {
@@ -238,6 +268,7 @@ __global__ void preprocessCUDA(
 	else
 	{
 		computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
+		invertSymmetricMatrix(cov3Ds + idx * 6, inverses_cov3Ds + idx * 6); //计算特征矩阵的逆矩阵
 		cov3D = cov3Ds + idx * 6;
 	}
 
@@ -253,7 +284,6 @@ __global__ void preprocessCUDA(
 	get3DRect(p_orig, my_radius, rect_min, rect_max, grid); //判断交叉
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y)*(rect_max.z - rect_min.z) == 0)
 		return;
-
 
 	radii[idx] = my_radius;
 	// 直接从原始点数组中获取点的坐标，并存储到输出数组中
@@ -273,7 +303,8 @@ renderCUDA(
     const float3* __restrict__ points_xyz_image, // 高斯点的位置信息
     const float3* __restrict__ convert_plane, // 每个体素的位置
     const float* __restrict__ opacities, // 每个高斯的不透明度
-    float* __restrict__ output_opacity // 输出的不透明度数组
+    float* __restrict__ output_opacity, // 输出的不透明度数组
+	float* __restrict__ inverses_cov3Ds
 ) {
     auto block = cg::this_thread_block();
     uint3 pix = { block.group_index().x * BLOCK_X + block.thread_index().x,
@@ -282,22 +313,27 @@ renderCUDA(
 
     uint idx = pix.z * W * H + pix.y * W + pix.x; // 计算当前处理点的线性索引
     float3 point = convert_plane[idx]; // 获取当前点的三维坐标
+	float in_cov3D = inverses_cov3Ds + idx*6
     float opacity_acc = 0.0; // 累积不透明度
     float weight_sum = 0.0; // 权重和
-
     // 直接遍历所有的高斯
     for (int i = 0; i < P; ++i) {
         float3 gauss_point = points_xyz_image[i]; // 高斯中心
-        float distance = length(gauss_point - point); // 计算距离
+        float3 d = { gauss_point.x - point.x, gauss_point.y - point.y, gauss_point.z - point.z }; 
+		float distance = length(gauss_point - point); // 计算距离
 
         int radius = radii[i];
         if (distance > 3 * radius) continue; // 如果距离大于半径的三倍，则忽略
 
-        float influence = exp(-distance * distance / (radius * radius));
-        float opacity = opacities[i] * influence; // 加权不透明度
+        float power = -0.5f *(in_cov3D[0] * d.x * d.x + in_cov3D[3] * d.y * d.y + in_cov3D[5] * d.z * d.z) 
+			- in_cov3D[1] * d.x * d.y - in_cov3D[2] * d.x * d.z - in_cov3D[4] * d.y * d.z;
+		if (power > 0.0f)
+			continue;
+
+        float opacity = opacities[i] * exp(power); // 加权不透明度
 
         opacity_acc += opacity;
-        weight_sum += influence;
+        weight_sum += exp(power);
     }
 
     if (weight_sum > 0) {
@@ -322,7 +358,8 @@ void FORWARD::render(
 }
 
 
-void FORWARD::preprocess(int P, int D, int M,
+void FORWARD::preprocess(int P, 
+	// int D, int M,
 	const float* means3D,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -340,7 +377,8 @@ void FORWARD::preprocess(int P, int D, int M,
 {
 	//check here
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
-		P, D, M,
+		P, 
+		// D, M,
 		means3D,
 		scales,
 		scale_modifier,

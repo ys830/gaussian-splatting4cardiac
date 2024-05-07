@@ -253,13 +253,11 @@ int CudaRasterizer::Rasterizer::forward(
 		scale_modifier,
 		(glm::vec4*)rotations,
 		opacities,
-		// geomState.clamped,
 		cov3D_precomp,
 		R,T,
 		(glm::vec3*)init_plane,
 		width, height,
 		radii,
-		// geomState.means2D,
 		geomState.cov3D,
 		tile_grid,
 		geomState.tiles_touched,
@@ -286,38 +284,45 @@ int CudaRasterizer::Rasterizer::forward(
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
 void CudaRasterizer::Rasterizer::backward(
-	const int P, int D, int M, int R,
-	const float* background,
+	const int P,  // Gaussian个数
+	// int D,  // 球谐度数
+	// int M,  // 三通道球谐系数个数
+	int R, // R对应CudaRasterizer::Rasterizer::forward函数中的num_rendered
+		   // 即排序数组的个数（等于每个Gaussian覆盖的tile的个数之和）
+	// const float* background,
 	const int width, int height,
 	const float* means3D,
-	const float* shs,
-	const float* colors_precomp,
+	// const float* shs,
+	// const float* colors_precomp,
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
 	const float* cov3D_precomp,
-	const float* viewmatrix,
-	const float* projmatrix,
-	const float* campos,
-	const float tan_fovx, float tan_fovy,
+	// const float* viewmatrix,
+	// const float* projmatrix,
+	const float* R,
+	const float* T,
+	// const float* campos,
+	const float* init_plane,
+	// const float tan_fovx, float tan_fovy,
 	const int* radii,
 	char* geom_buffer,
-	char* binning_buffer,
+	// char* binning_buffer,
 	char* img_buffer,
-	const float* dL_dpix,
-	float* dL_dmean2D,
-	float* dL_dconic,
-	float* dL_dopacity,
-	float* dL_dcolor,
-	float* dL_dmean3D,
-	float* dL_dcov3D,
-	float* dL_dsh,
-	float* dL_dscale,
-	float* dL_drot,
+	const float* dL_dpix, // loss对每个像素颜色的导数
+	float* dL_dmean2D, // loss对Gaussian二维中心坐标的导数
+	// float* dL_dconic, // loss对椭圆二次型矩阵的导数
+	float* dL_dopacity, // loss对不透明度的导数
+	// float* dL_dcolor, // loss对Gaussian颜色的导数（颜色是从相机中心看向Gaussian的颜色）
+	float* dL_dmean3D, // loss对Gaussian三维中心坐标的导数
+	float* dL_dcov3D, // loss对Gaussian三维协方差矩阵的导数
+	// float* dL_dsh, // loss对Gaussian的球谐系数的导数
+	float* dL_dscale, // loss对Gaussian的缩放参数的导数
+	float* dL_drot, // loss对Gaussian旋转四元数的导数
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
-	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
+	// BinningState binningState = BinningState::fromChunk(binning_buffer, R);
 	ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
 
 	if (radii == nullptr)
@@ -325,8 +330,8 @@ void CudaRasterizer::Rasterizer::backward(
 		radii = geomState.internal_radii;
 	}
 
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
+	// const float focal_y = height / (2.0f * tan_fovy);
+	// const float focal_x = width / (2.0f * tan_fovx);
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
@@ -339,11 +344,11 @@ void CudaRasterizer::Rasterizer::backward(
 		tile_grid,
 		block,
 		// imgState.ranges,
-		binningState.point_list,
+		// binningState.point_list,
 		width, height,
-		background,
+		// background,
 		// geomState.means2D,
-		geomState.conic_opacity,
+		// geomState.conic_opacity,
 		color_ptr,
 		imgState.accum_alpha,
 		imgState.n_contrib,

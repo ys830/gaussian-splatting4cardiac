@@ -47,7 +47,6 @@ namespace CudaRasterizer
 	struct ImageState
 	{
 		// uint2* ranges;
-		// uint3* ranges;
 		// uint32_t* n_contrib;
 		// float* accum_alpha;
 		float* accum_opacity;
