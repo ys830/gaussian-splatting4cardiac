@@ -231,7 +231,7 @@ __global__ void preprocessCUDA(
 	int* radii,
 	float3* points_xyz_image
 	float* cov3Ds,
-	float* inverses_cov3Ds
+	float* inverses_cov3Ds,
 	const dim3 grid, //CUDA 网格的大小
 	uint32_t* tiles_touched) //记录每个高斯覆盖的图像块数量的数组
 {
@@ -304,7 +304,8 @@ renderCUDA(
     const float3* __restrict__ convert_plane, // 每个体素的位置
     const float* __restrict__ opacities, // 每个高斯的不透明度
     float* __restrict__ output_opacity, // 输出的不透明度数组
-	float* __restrict__ inverses_cov3Ds
+	float* __restrict__ inverses_cov3Ds,
+	float* __restrict__ weight_sum
 ) {
     auto block = cg::this_thread_block();
     uint3 pix = { block.group_index().x * BLOCK_X + block.thread_index().x,
@@ -313,18 +314,19 @@ renderCUDA(
 
     uint idx = pix.z * W * H + pix.y * W + pix.x; // 计算当前处理点的线性索引
     float3 point = convert_plane[idx]; // 获取当前点的三维坐标
-	float in_cov3D = inverses_cov3Ds + idx*6
+	// float in_cov3D = inverses_cov3Ds + idx*6
     float opacity_acc = 0.0; // 累积不透明度
-    float weight_sum = 0.0; // 权重和
+    float weight = 0.0; // 记录权重和
     // 直接遍历所有的高斯
     for (int i = 0; i < P; ++i) {
         float3 gauss_point = points_xyz_image[i]; // 高斯中心
-        float3 d = { gauss_point.x - point.x, gauss_point.y - point.y, gauss_point.z - point.z }; 
+        float3 d = { point.x - gauss_point.x, point.y - gauss_point.y, point.z - gauss_point.z }; 
 		float distance = length(gauss_point - point); // 计算距离
 
         int radius = radii[i];
         if (distance > 3 * radius) continue; // 如果距离大于半径的三倍，则忽略
-
+		
+		const float* in_cov3D = &inverses_cov3Ds[i * 6]; // 当前高斯的反协方差矩阵
         float power = -0.5f *(in_cov3D[0] * d.x * d.x + in_cov3D[3] * d.y * d.y + in_cov3D[5] * d.z * d.z) 
 			- in_cov3D[1] * d.x * d.y - in_cov3D[2] * d.x * d.z - in_cov3D[4] * d.y * d.z;
 		if (power > 0.0f)
@@ -333,13 +335,15 @@ renderCUDA(
         float opacity = opacities[i] * exp(power); // 加权不透明度
 
         opacity_acc += opacity;
-        weight_sum += exp(power);
+        weight += exp(power);
     }
 
-    if (weight_sum > 0) {
-        output_opacity[idx] = opacity_acc / weight_sum; // 计算加权平均不透明度
-    } else {
+    if (weight > 0) {
+        output_opacity[idx] = opacity_acc / weight; // 计算加权平均不透明度
+		weight_sum[idx] = weight;
+	} else {
         output_opacity[idx] = 0.0; // 如果没有任何有效的高斯影响，设置不透明度为0
+		weight_sum[idx] = 0.0;
     }
 }
 
@@ -347,20 +351,29 @@ void FORWARD::render(
     const dim3 grid, dim3 block,
     int P, // 总高斯数目
     int W, int H, // 体数据的宽度、高度
+	const int* radii,
+	const float3* points_xyz_image,
+	const float3*  convert_plane,
     const float* opacities, // 每个高斯的不透明度数组
     float* output_opacity // 输出的不透明度数组
-) {
+	float*  inverses_cov3Ds,
+	float*  weight_sum)
+	{
     renderCUDA<NUM_CHANNELS> <<<grid, block>>> (
         P,
         W, H,
+		radii,
+		points_xyz_image,
+		convert_plane,
         opacities,
-        output_opacity);
+        output_opacity,
+		inverses_cov3Ds,
+		weight_sum);
 }
 
 
 void FORWARD::preprocess(int P, 
-	// int D, int M,
-	const float* means3D,
+	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
@@ -369,27 +382,33 @@ void FORWARD::preprocess(int P,
 	const float* R,
 	const float* T,
 	const float* init_plane,
+	float3* convert_plane,
 	const int W, int H,
 	int* radii,
+	float3* points_xyz_image
 	float* cov3Ds,
+	float* inverses_cov3Ds,
 	const dim3 grid,
 	uint32_t* tiles_touched)
 {
 	//check here
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, 
-		// D, M,
-		means3D,
+		orig_points,
 		scales,
 		scale_modifier,
 		rotations,
 		opacities,
 		cov3D_precomp,
+		R,
+		T,
 		init_plane,
+		convert_plane,
 		W, H,
 		radii,
-		R, T,
+		points_xyz_image
 		cov3Ds,
+		inverses_cov3Ds,
 		grid,
 		tiles_touched
 		);

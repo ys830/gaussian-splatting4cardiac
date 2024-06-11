@@ -49,119 +49,99 @@ uint32_t getHigherMsb(uint32_t n)
 	return msb;
 }
 
-// Wrapper method to call auxiliary coarse frustum containment test.
-// Mark all Gaussians that pass it.
-__global__ void checkFrustum(int P,
-	const float* orig_points,
-	const float* viewmatrix,
-	const float* projmatrix,
-	bool* present)
-{
-	auto idx = cg::this_grid().thread_rank();
-	if (idx >= P)
-		return;
-
-	float3 p_view;
-	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, false, p_view);
-}
-
 // Generates one key/value pair for all Gaussian / tile overlaps. 
 // Run once per Gaussian (1:N mapping).
-__global__ void duplicateWithKeys(
-	int P,
-	const float2* points_xy,
-	const float* depths,
-	const uint32_t* offsets,
-	uint64_t* gaussian_keys_unsorted,
-	uint32_t* gaussian_values_unsorted,
-	int* radii,
-	dim3 grid)
-{
-	auto idx = cg::this_grid().thread_rank();
-	if (idx >= P)
-		return;
+// __global__ void duplicateWithKeys(
+// 	int P,
+// 	const float2* points_xy,
+// 	const float* depths,
+// 	const uint32_t* offsets,
+// 	uint64_t* gaussian_keys_unsorted,
+// 	uint32_t* gaussian_values_unsorted,
+// 	int* radii,
+// 	dim3 grid)
+// {
+// 	auto idx = cg::this_grid().thread_rank();
+// 	if (idx >= P)
+// 		return;
 
-	// Generate no key/value pair for invisible Gaussians
-	if (radii[idx] > 0)
-	{
-		// Find this Gaussian's offset in buffer for writing keys/values.
-		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
-		uint2 rect_min, rect_max;
+// 	// Generate no key/value pair for invisible Gaussians
+// 	if (radii[idx] > 0)
+// 	{
+// 		// Find this Gaussian's offset in buffer for writing keys/values.
+// 		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
+// 		uint2 rect_min, rect_max;
 
-		getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
+// 		getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
 
-		// For each tile that the bounding rect overlaps, emit a 
-		// key/value pair. The key is |  tile ID  |      depth      |,
-		// and the value is the ID of the Gaussian. Sorting the values 
-		// with this key yields Gaussian IDs in a list, such that they
-		// are first sorted by tile and then by depth. 
-		for (int y = rect_min.y; y < rect_max.y; y++)
-		{
-			for (int x = rect_min.x; x < rect_max.x; x++)
-			{
-				uint64_t key = y * grid.x + x;
-				key <<= 32;
-				key |= *((uint32_t*)&depths[idx]);
-				gaussian_keys_unsorted[off] = key;
-				gaussian_values_unsorted[off] = idx;
-				off++;
-			}
-		}
-	}
-}
+// 		// For each tile that the bounding rect overlaps, emit a 
+// 		// key/value pair. The key is |  tile ID  |      depth      |,
+// 		// and the value is the ID of the Gaussian. Sorting the values 
+// 		// with this key yields Gaussian IDs in a list, such that they
+// 		// are first sorted by tile and then by depth. 
+// 		for (int y = rect_min.y; y < rect_max.y; y++)
+// 		{
+// 			for (int x = rect_min.x; x < rect_max.x; x++)
+// 			{
+// 				uint64_t key = y * grid.x + x;
+// 				key <<= 32;
+// 				key |= *((uint32_t*)&depths[idx]);
+// 				gaussian_keys_unsorted[off] = key;
+// 				gaussian_values_unsorted[off] = idx;
+// 				off++;
+// 			}
+// 		}
+// 	}
+// }
 
 // Check keys to see if it is at the start/end of one tile's range in 
 // the full sorted list. If yes, write start/end of this tile. 
 // Run once per instanced (duplicated) Gaussian ID.
-__global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges)
-{
-	auto idx = cg::this_grid().thread_rank();
-	if (idx >= L)
-		return;
+// __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* ranges)
+// {
+// 	auto idx = cg::this_grid().thread_rank();
+// 	if (idx >= L)
+// 		return;
 
-	// Read tile ID from key. Update start/end of tile range if at limit.
-	uint64_t key = point_list_keys[idx];
-	uint32_t currtile = key >> 32;
-	if (idx == 0)
-		ranges[currtile].x = 0;
-	else
-	{
-		uint32_t prevtile = point_list_keys[idx - 1] >> 32;
-		if (currtile != prevtile)
-		{
-			ranges[prevtile].y = idx;
-			ranges[currtile].x = idx;
-		}
-	}
-	if (idx == L - 1)
-		ranges[currtile].y = L;
-}
+// 	// Read tile ID from key. Update start/end of tile range if at limit.
+// 	uint64_t key = point_list_keys[idx];
+// 	uint32_t currtile = key >> 32;
+// 	if (idx == 0)
+// 		ranges[currtile].x = 0;
+// 	else
+// 	{
+// 		uint32_t prevtile = point_list_keys[idx - 1] >> 32;
+// 		if (currtile != prevtile)
+// 		{
+// 			ranges[prevtile].y = idx;
+// 			ranges[currtile].x = idx;
+// 		}
+// 	}
+// 	if (idx == L - 1)
+// 		ranges[currtile].y = L;
+// }
 
 // Mark Gaussians as visible/invisible, based on view frustum testing
-void CudaRasterizer::Rasterizer::markVisible(
-	int P,
-	float* means3D,
-	float* viewmatrix,
-	float* projmatrix,
-	bool* present)
-{
-	checkFrustum << <(P + 255) / 256, 256 >> > (
-		P,
-		means3D,
-		viewmatrix, projmatrix,
-		present);
-}
+// void CudaRasterizer::Rasterizer::markVisible(
+// 	int P,
+// 	float* means3D,
+// 	float* viewmatrix,
+// 	float* projmatrix,
+// 	bool* present)
+// {
+// 	checkFrustum << <(P + 255) / 256, 256 >> > (
+// 		P,
+// 		means3D,
+// 		viewmatrix, projmatrix,
+// 		present);
+// }
 
 CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& chunk, size_t P)
 {
 	GeometryState geom;
-	// obtain(chunk, geom.depths, P, 128);
-	// obtain(chunk, geom.clamped, P * 3, 128);
 	obtain(chunk, geom.internal_radii, P, 128);
 	obtain(chunk, geom.means2D, P, 128);
 	obtain(chunk, geom.cov3D, P * 6, 128);
-	// obtain(chunk, geom.conic_opacity, P, 128);
-	// obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.opacity, P, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P); //计算 geom.tiles_touched 的前缀和 
@@ -173,27 +153,24 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, size_t N)
 {
 	ImageState img;
-	// obtain(chunk, img.accum_alpha, N, 128);
 	obtain(chunk, img.accum_opacity, N, 128);
-	// obtain(chunk, img.n_contrib, N, 128);
-	// obtain(chunk, img.ranges, N, 128);
 	return img;
 }
 
-CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chunk, size_t P)
-{
-	BinningState binning;
-	obtain(chunk, binning.point_list, P, 128);
-	obtain(chunk, binning.point_list_unsorted, P, 128);
-	obtain(chunk, binning.point_list_keys, P, 128);
-	obtain(chunk, binning.point_list_keys_unsorted, P, 128);
-	cub::DeviceRadixSort::SortPairs(
-		nullptr, binning.sorting_size,
-		binning.point_list_keys_unsorted, binning.point_list_keys,
-		binning.point_list_unsorted, binning.point_list, P);
-	obtain(chunk, binning.list_sorting_space, binning.sorting_size, 128);
-	return binning;
-}
+// CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chunk, size_t P)
+// {
+// 	BinningState binning;
+// 	obtain(chunk, binning.point_list, P, 128);
+// 	obtain(chunk, binning.point_list_unsorted, P, 128);
+// 	obtain(chunk, binning.point_list_keys, P, 128);
+// 	obtain(chunk, binning.point_list_keys_unsorted, P, 128);
+// 	cub::DeviceRadixSort::SortPairs(
+// 		nullptr, binning.sorting_size,
+// 		binning.point_list_keys_unsorted, binning.point_list_keys,
+// 		binning.point_list_unsorted, binning.point_list, P);
+// 	obtain(chunk, binning.list_sorting_space, binning.sorting_size, 128);
+// 	return binning;
+// }
 
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
@@ -201,9 +178,8 @@ int CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	// std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
-	const int P, int D, int M,
+	const int P, 
 	const float* orig_points,
-	// const float* background,
 	const int width, int height,
 	const float* means3D,
 	const float* opacities,
@@ -214,13 +190,10 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* R,
 	const float* T,
 	const float* init_plane,
-	// float* output_opacity,
+	float* output_opacity,
 	int* radii,
 	bool debug)
 {
-	// const float focal_y = height / (2.0f * tan_fovy);
-	// const float focal_x = width / (2.0f * tan_fovx);
-
 	size_t chunk_size = required<GeometryState>(P);
 	char* chunkptr = geometryBuffer(chunk_size);
 	GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
@@ -247,7 +220,7 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
-		P, D, M,
+		P, 
 		means3D,
 		(glm::vec3*)scales,
 		scale_modifier,
@@ -266,17 +239,9 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		P,
-		// imgState.ranges,
-		// binningState.point_list,
 		width, height,
-		// geomState.means2D,
-		// geomState.conic_opacity,
 		geomState.opacity,
-		imgState.accum_opacity),
-		// imgState.n_contrib,
-		// background,
-		// output_opacity), 
-		debug)
+		output_opacity),debug)
 
 	return P;// Since binning is not used, return P (number of processed Gaussians)
 }
@@ -287,7 +252,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const int P,  // Gaussian个数
 	// int D,  // 球谐度数
 	// int M,  // 三通道球谐系数个数
-	int R, // R对应CudaRasterizer::Rasterizer::forward函数中的num_rendered
+	int NR, // R对应CudaRasterizer::Rasterizer::forward函数中的num_rendered
 		   // 即排序数组的个数（等于每个Gaussian覆盖的tile的个数之和）
 	// const float* background,
 	const int width, int height,
@@ -311,6 +276,7 @@ void CudaRasterizer::Rasterizer::backward(
 	char* img_buffer,
 	const float* dL_dpix, // loss对每个像素颜色的导数
 	float* dL_dmean2D, // loss对Gaussian二维中心坐标的导数
+	float* dL_dinverses_cov3D,
 	// float* dL_dconic, // loss对椭圆二次型矩阵的导数
 	float* dL_dopacity, // loss对不透明度的导数
 	// float* dL_dcolor, // loss对Gaussian颜色的导数（颜色是从相机中心看向Gaussian的颜色）
@@ -330,31 +296,20 @@ void CudaRasterizer::Rasterizer::backward(
 		radii = geomState.internal_radii;
 	}
 
-	// const float focal_y = height / (2.0f * tan_fovy);
-	// const float focal_x = width / (2.0f * tan_fovx);
-
-	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
-	const dim3 block(BLOCK_X, BLOCK_Y, 1);
+	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, (height + BLOCK_Z - 1) / BLOCK_Z);
+	dim3 block(BLOCK_X, BLOCK_Y, BLOCK_Z);
 
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
-	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
+	// const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
 		block,
-		// imgState.ranges,
-		// binningState.point_list,
 		width, height,
-		// background,
-		// geomState.means2D,
-		// geomState.conic_opacity,
-		color_ptr,
-		imgState.accum_alpha,
-		imgState.n_contrib,
 		dL_dpix,
-		(float3*)dL_dmean2D,
-		(float4*)dL_dconic,
+		
+		(float*)dL_dinverses_cov3D,
 		dL_dopacity,
 		dL_dcolor), debug)
 
@@ -377,7 +332,7 @@ void CudaRasterizer::Rasterizer::backward(
 		tan_fovx, tan_fovy,
 		(glm::vec3*)campos,
 		(float3*)dL_dmean2D,
-		dL_dconic,
+		dL_dinverses_cov3D,
 		(glm::vec3*)dL_dmean3D,
 		dL_dcolor,
 		dL_dcov3D,
